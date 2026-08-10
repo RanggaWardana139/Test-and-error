@@ -159,7 +159,7 @@ const SOURCES = [
   { key:'woodline',   label:'F1 - Crusher Wood Charcoal',          target:6000,  url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=143607530&single=true&output=csv', cols:{week:0,date:1,shift:2,val:5} },
   { key:'readymix',   label:null, target:20000, isReadyMix:true, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=560704222&single=true&output=csv', cols:{week:0,date:1,shift:2,line:3,val:5} },
   { key:'briquettes', label:'Briquettes Line Factory 2',           target:32000, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1694376471&single=true&output=csv', cols:{week:0,date:1,shift:2,val:4} },
-  { key:'bagmaking',  label:'F3 - Bag Making',                     target:6000,  unit:'pcs', url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=808318571&single=true&output=csv', cols:{week:0,date:1,shift:2,val:4} },
+  { key:'bagmaking',  label:'F3 - Bag Making', target:null, unit:'pcs', noShifts:true, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=808318571&single=true&output=csv', cols:{week:0,date:2,planning:3,val:4} },
   { key:'packing',    label:'F4 - Packing Line',                   target:25000, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1228034420&single=true&output=csv', cols:{week:0,date:1,shift:2,val:4} },
 ];
 
@@ -174,7 +174,7 @@ const GROUP_ORDER = [
   { key:'readymix_l1', label:'F2 - Ready Mix Line 1',            target:20000 },
   { key:'readymix_l2', label:'F2 - Ready Mix Line 2',            target:20000 },
   { key:'briquettes',  label:'Briquettes Line Factory 2',        target:32000 },
-  { key:'bagmaking',   label:'F3 - Bag Making',                  target:6000, unit:'pcs' },
+  { key:'bagmaking',   label:'F3 - Bag Making',                  target:null, unit:'pcs', noShifts:true },
   { key:'packing',     label:'F4 - Packing Line',                target:25000 },
 ];
 
@@ -217,12 +217,21 @@ function parseProdDate(raw, week){
   return isNaN(generic) ? null : generic;
 }
 
-async function fetchCsvRows(url){
-  const res = await fetch(url);
-  if(!res.ok) throw new Error('HTTP '+res.status);
-  const text = await res.text();
-  const parsed = Papa.parse(text, {skipEmptyLines:false});
-  return parsed.data;
+async function fetchCsvRows(url, retries=2){
+  let lastErr;
+  for(let attempt=0; attempt<=retries; attempt++){
+    try{
+      const res = await fetch(url);
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const text = await res.text();
+      const parsed = Papa.parse(text, {skipEmptyLines:false});
+      return parsed.data;
+    }catch(e){
+      lastErr = e;
+      if(attempt<retries) await new Promise(r=>setTimeout(r, 600*(attempt+1)));
+    }
+  }
+  throw lastErr;
 }
 
 // Maps a header cell like "Screening" / "Crushing Candle Nut" / "Ready Mix"
@@ -280,7 +289,7 @@ function parseWeeklyTargets(rows){
   return out;
 }
 
-function processSource(source, rows, out){
+function processSource(source, rows, out, dayTargetsOut){
   const c = source.cols;
   let headerIdx = -1;
   for(let i=0;i<rows.length;i++){
@@ -294,9 +303,9 @@ function processSource(source, rows, out){
     if(!r || r.length===0) continue;
     const rawWeek = (r[c.week]||'').toString().trim();
     const rawDate = (r[c.date]||'').toString().trim();
-    const rawShift = (r[c.shift]||'').toString().trim();
+    const rawShift = source.noShifts ? '1' : (r[c.shift]||'').toString().trim();
     const rawVal = (r[c.val]||'').toString().trim();
-    if(!rawDate || !rawShift || rawVal==='') continue;
+    if(!rawDate || (!source.noShifts && !rawShift) || rawVal==='') continue;
     const val = parseFloat(rawVal);
     if(isNaN(val)) continue;
     const week = parseInt(rawWeek);
@@ -324,7 +333,7 @@ function processSource(source, rows, out){
     // drop genuine stray rows: a full year (or more) outside the reporting window
     if(dUTC < Date.UTC(2025,10,1) || dUTC > Date.UTC(2026,8,1)) continue;
 
-    const shift = String(parseInt(rawShift));
+    const shift = source.noShifts ? '1' : String(parseInt(rawShift));
     const value = Math.ceil(val);
     const dateStr = dt.toISOString().slice(0,10);
 
@@ -337,10 +346,23 @@ function processSource(source, rows, out){
     }
 
     out.push([gkey, effWeek, shift, dateStr, value]);
+
+    // Bag Making (and any future no-shift line): capture that day's own
+    // Planning value as its target, instead of relying on a fixed constant.
+    if(source.noShifts && c.planning!==undefined){
+      const rawPlan = (r[c.planning]||'').toString().trim().replace(/,/g,'');
+      const planVal = parseFloat(rawPlan);
+      if(!isNaN(planVal)){
+        dayTargetsOut[effWeek] = dayTargetsOut[effWeek] || {};
+        dayTargetsOut[effWeek][gkey] = dayTargetsOut[effWeek][gkey] || {};
+        dayTargetsOut[effWeek][gkey][dateStr] = Math.ceil(planVal);
+      }
+    }
   }
 }
 
-function buildData(rows){
+function buildData(rows, dayTargets){
+  dayTargets = dayTargets || {};
   const cellSums = {}; // week -> gkey -> shift -> date -> sum
   for(const [gkey, week, shift, dateStr, value] of rows){
     cellSums[week] = cellSums[week] || {};
@@ -358,23 +380,41 @@ function buildData(rows){
     for(const g of GROUP_ORDER){
       const shiftsData = (cellSums[w]||{})[g.key] || {'1':{}, '2':{}, '3':{}};
       cells[ws][g.key] = {}; rowTotals[ws][g.key] = {};
-      for(const shift of ['1','2','3']){
+      const shiftsToProcess = g.noShifts ? ['1'] : ['1','2','3'];
+      for(const shift of shiftsToProcess){
         const dayVals = shiftsData[shift] || {};
         const dayCells = {};
-        let total = 0, ndays = 0;
+        let total = 0, ndays = 0, targetSum = 0, targetDays = 0;
         for(const dateStr of Object.keys(dayVals).sort()){
           const v = Math.round(dayVals[dateStr]);
-          const pct = Math.round((v/g.target*100)*10)/10;
+          let pct;
+          if(g.noShifts){
+            const dTarget = (dayTargets[w] && dayTargets[w][g.key] && dayTargets[w][g.key][dateStr]) || null;
+            pct = dTarget ? Math.round((v/dTarget*100)*10)/10 : null;
+            if(dTarget){ targetSum += dTarget; targetDays++; }
+          } else {
+            pct = Math.round((v/g.target*100)*10)/10;
+          }
           dayCells[dateStr] = {value:v, pct:pct};
           total += v; ndays += 1;
         }
         cells[ws][g.key][shift] = dayCells;
         if(ndays>0){
-          const pctTotal = Math.round((total/(g.target*ndays)*100)*10)/10;
-          rowTotals[ws][g.key][shift] = {total:total, pct:pctTotal, days:ndays};
+          let pctTotal;
+          if(g.noShifts){
+            pctTotal = targetDays>0 ? Math.round((total/targetSum*100)*10)/10 : null;
+          } else {
+            pctTotal = Math.round((total/(g.target*ndays)*100)*10)/10;
+          }
+          rowTotals[ws][g.key][shift] = {total:total, pct:pctTotal, days:ndays, targetSum:(g.noShifts?targetSum:undefined)};
         } else {
           rowTotals[ws][g.key][shift] = {total:null, pct:null, days:0};
         }
+      }
+      if(g.noShifts){
+        cells[ws][g.key]['2'] = {}; cells[ws][g.key]['3'] = {};
+        rowTotals[ws][g.key]['2'] = {total:null,pct:null,days:0};
+        rowTotals[ws][g.key]['3'] = {total:null,pct:null,days:0};
       }
     }
   }
@@ -382,7 +422,7 @@ function buildData(rows){
   return {
     allWeeks: allWeeks,
     weekDays: weekDays,
-    groups: GROUP_ORDER.map(g=>({key:g.key, label:g.label, target:g.target, unit:g.unit||'kg'})),
+    groups: GROUP_ORDER.map(g=>({key:g.key, label:g.label, target:g.target, unit:g.unit||'kg', noShifts:!!g.noShifts})),
     cells: cells,
     rowTotals: rowTotals,
   };
@@ -396,11 +436,12 @@ async function loadData(){
   statusBar.className = '';
   statusBar.textContent = 'Loading latest data from Google Sheets…';
   const allRows = [];
+  const dayTargets = {};
   const failed = [];
   for(const source of SOURCES){
     try{
       const rows = await fetchCsvRows(source.url);
-      processSource(source, rows, allRows);
+      processSource(source, rows, allRows, dayTargets);
     }catch(e){
       failed.push(source.key);
       console.error('Failed to load', source.key, e);
@@ -422,7 +463,7 @@ async function loadData(){
     statusBar.textContent = 'Could not load any data — check the Sheets are still published to web, or your network/sharing settings.';
     return;
   }
-  DATA = buildData(allRows);
+  DATA = buildData(allRows, dayTargets);
   DATA.weeklyTargets = weeklyTargets;
   if(failed.length){
     statusBar.className = 'error';
@@ -482,15 +523,25 @@ function render(){
     const totalsForGroup = DATA.rowTotals[String(w)][g.key] || {};
     const targetKey = (g.key==='readymix_l1' || g.key==='readymix_l2') ? null : g.key;
     const weekTargets = (DATA.weeklyTargets && DATA.weeklyTargets[w]) || {};
-    const realTarget = targetKey ? weekTargets[targetKey] : undefined;
+    let realTarget;
+    if(g.noShifts){
+      const tot1 = totalsForGroup['1'];
+      realTarget = (tot1 && tot1.targetSum) ? tot1.targetSum : undefined;
+    } else {
+      realTarget = targetKey ? weekTargets[targetKey] : undefined;
+    }
     const hasRealTarget = realTarget !== undefined && realTarget !== null;
-    [1,2,3].forEach((shift, si)=>{
+    const shiftList = g.noShifts ? [1] : [1,2,3];
+    shiftList.forEach((shift, si)=>{
       const tr = document.createElement('tr');
       let rowHtml = '';
       if(si===0){
-        rowHtml += `<td class="rowhead" rowspan="3">${g.label}<div style="font-weight:400; color:var(--muted); font-size:13px; margin-top:3px;">target ${fmt(g.target)} ${g.unit||'kg'}/shift</div></td>`;
+        const subtitle = g.noShifts
+          ? `target set daily (see Weekly Target)`
+          : `target ${fmt(g.target)} ${g.unit||'kg'}/shift`;
+        rowHtml += `<td class="rowhead" rowspan="${shiftList.length}">${g.label}<div style="font-weight:400; color:var(--muted); font-size:13px; margin-top:3px;">${subtitle}</div></td>`;
       }
-      rowHtml += `<td class="shifthead">Shift ${shift}</td>`;
+      rowHtml += `<td class="shifthead">${g.noShifts ? 'Daily' : ('Shift '+shift)}</td>`;
 
       days.forEach(day=>{
         const rec = (cellsForGroup[String(shift)] || {})[day];
@@ -499,7 +550,7 @@ function render(){
             <div class="split-row">
               <span class="split-val" style="color:${bandText(rec.pct)}">${fmt(rec.value)}</span>
               <span class="split-div"></span>
-              <span class="split-pct" style="color:${bandText(rec.pct)}">${rec.pct}%</span>
+              <span class="split-pct" style="color:${bandText(rec.pct)}">${rec.pct===null?'&mdash;':rec.pct+'%'}</span>
             </div>
           </td>`;
         } else {
@@ -513,25 +564,39 @@ function render(){
           <div class="split-row">
             <span class="split-val" style="color:${bandText(tot.pct)}">${fmt(tot.total)}</span>
             <span class="split-div"></span>
-            <span class="split-pct" style="color:${bandText(tot.pct)}">${tot.pct}%</span>
+            <span class="split-pct" style="color:${bandText(tot.pct)}">${tot.pct===null?'&mdash;':tot.pct+'%'}</span>
           </div>
         </td>`;
       } else {
         rowHtml += `<td class="total-cell empty">&mdash;</td>`;
       }
       // Weekly Target is a line-level concept (real management target), not
-      // a per-shift one — shown once, spanning the 3 shift rows.
+      // a per-shift one — shown once, spanning the data rows for this line.
       if(si===0){
         if(hasRealTarget){
-          rowHtml += `<td class="target-static-cell" rowspan="3">${fmt(realTarget)}</td>`;
+          rowHtml += `<td class="target-static-cell" rowspan="${shiftList.length}">${fmt(realTarget)}</td>`;
         } else {
-          rowHtml += `<td class="target-static-cell empty" rowspan="3">&mdash;</td>`;
+          rowHtml += `<td class="target-static-cell empty" rowspan="${shiftList.length}">&mdash;</td>`;
         }
       }
 
       tr.innerHTML = rowHtml;
       tbody.appendChild(tr);
     });
+
+    // No-shift lines (e.g. Bag Making) already show their one and only row
+    // above with its own Week Total + Weekly Target — a second "Daily Total"
+    // row would just repeat the same numbers, so skip it.
+    if(g.noShifts){
+      groupWeekSums[g.key] = { dayVals: {}, weekSum: (totalsForGroup['1'] && totalsForGroup['1'].total) || 0 };
+      if(gi < DATA.groups.length - 1){
+        const trSpacer = document.createElement('tr');
+        trSpacer.className = 'group-spacer';
+        trSpacer.innerHTML = `<td colspan="${4 + days.length}"></td>`;
+        tbody.appendChild(trSpacer);
+      }
+      return;
+    }
 
     // Daily Total row: sum of all shifts logged that day, for this line
     const trTotal = document.createElement('tr');
