@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weekly Calendar Output Matrix</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+:root{
+  /* Longhi Group DM v2.0 brand palette */
+  --brand-dark-blue:#1e3b5c; --brand-light-blue:#83abd6; --brand-black:#000000; --brand-white:#ffffff;
+  --bg:#ffffff; --panel:#f3f7fb; --panel-2:#e8ebef; --line:#d2d8de;
+  --text:#000000; --muted:#4b627d; --accent:#1e3b5c; --accent-2:#83abd6; --steel:#62768d;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+body{ background:var(--bg); color:var(--text); font-family:'Calibri','Segoe UI',Arial,sans-serif; }
+.mono{ font-family:'Calibri','Segoe UI',Arial,sans-serif; }
+
+.topbar{ padding:22px 0; border-bottom:3px solid var(--brand-dark-blue); background:var(--brand-dark-blue); }
+.topbar-inner{ max-width:1400px; margin:0 auto; padding:0 28px; position:relative; text-align:center; }
+.topbar h1{ font-size:24px; letter-spacing:0.5px; font-weight:700; color:var(--brand-white); }
+.topbar h1 .accent{ color:var(--brand-light-blue); }
+.topbar .sub{ color:var(--brand-light-blue); font-size:12.5px; margin-top:6px; }
+
+.week-nav{ display:flex; align-items:center; gap:10px; background:var(--brand-white); border:1px solid var(--line); border-radius:8px; padding:8px 10px; position:absolute; right:28px; top:50%; transform:translateY(-50%); }
+.brand-logo{ position:absolute; left:28px; top:50%; transform:translateY(-50%); background:var(--brand-white); border-radius:8px; padding:6px 12px; display:flex; align-items:center; }
+.brand-logo img{ display:block; height:28px; width:auto; }
+.week-nav button{ width:30px; height:30px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--brand-dark-blue); cursor:pointer; font-size:14px; }
+.week-nav button:hover{ border-color:var(--brand-dark-blue); color:var(--brand-dark-blue); background:var(--panel-2); }
+.week-nav button:disabled{ opacity:0.3; cursor:not-allowed; }
+.week-nav select{ background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 10px; font-size:13px; font-family:'Calibri','Segoe UI',Arial,sans-serif; cursor:pointer; }
+#refreshData{ width:30px; height:30px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--brand-dark-blue); cursor:pointer; font-size:15px; }
+#refreshData:hover{ border-color:var(--brand-dark-blue); background:var(--panel-2); }
+#refreshData.spinning{ animation:spin 0.8s linear infinite; }
+@keyframes spin{ from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
+#statusBar.error{ color:#B23B2E; }
+
+@media (max-width: 700px){
+  .topbar-inner{ display:flex; flex-direction:column; align-items:center; gap:12px; }
+  .week-nav{ position:static; transform:none; }
+  .brand-logo{ position:static; transform:none; }
+}
+
+.wrap{ max-width:1400px; margin:0 auto; padding:22px 28px 60px; overflow-x:auto; }
+
+table.matrix{ border-collapse:separate; border-spacing:0; width:100%; min-width:1100px; }
+table.matrix th, table.matrix td{ border:1px solid var(--line); padding:0; text-align:center; }
+table.matrix thead th{
+  background:var(--brand-dark-blue); padding:8px 4px; font-size:11px; color:var(--brand-white); font-weight:600;
+  position:sticky; top:0; z-index:2;
+}
+table.matrix thead th .dow{ display:block; font-size:10px; color:var(--brand-light-blue); text-transform:uppercase; letter-spacing:0.06em; }
+table.matrix thead th .dd{ display:block; font-family:'Calibri','Segoe UI',Arial,sans-serif; font-size:12.5px; color:var(--brand-white); margin-top:2px; }
+table.matrix thead th.total-head{ background: var(--brand-dark-blue); color:var(--brand-light-blue); }
+
+td.rowhead{
+  background:var(--panel-2); text-align:left; padding:8px 10px; font-size:16px; font-weight:700; color:var(--brand-dark-blue);
+  white-space:normal; vertical-align:middle; position:sticky; left:0; z-index:1; max-width:210px;
+}
+td.shifthead{
+  background:var(--panel); text-align:left; padding:6px 10px; font-size:11px; color:var(--muted);
+  white-space:nowrap; position:sticky; left:0; z-index:1; font-family:'Calibri','Segoe UI',Arial,sans-serif;
+}
+td.cell{ padding:0; font-size:11px; min-width:100px; height:34px; }
+td.cell.empty{ color:var(--muted); opacity:0.35; padding:6px 3px; text-align:center; }
+td.total-cell{ background:var(--panel); font-weight:700; height:34px; padding:0; }
+td.target-cell{ background:var(--panel); font-weight:700; height:34px; padding:0; }
+td.target-cell.empty{ color:var(--muted); opacity:0.35; padding:6px 10px; text-align:center; font-weight:600; font-size:12.5px; }
+.target-pct-only{ font-family:'Calibri','Segoe UI',Arial,sans-serif; font-weight:700; font-size:13.5px; }
+td.target-static-cell{ background:var(--brand-white); border-left:1px solid var(--line); color:var(--brand-dark-blue); font-weight:700; font-size:17px; text-align:center; vertical-align:middle; }
+td.target-static-cell.empty{ color:var(--muted); opacity:0.35; font-size:12.5px; font-weight:600; }
+tr.combine-row td.daily-total-head{ font-style:italic; color:var(--steel); }
+tr.combine-row td{ background:var(--panel-2); }
+tr.combine-row td.target-cell{ background-blend-mode:normal; }
+td.total-cell.empty{ padding:6px 3px; text-align:center; }
+
+.split-row{ display:flex; align-items:center; justify-content:space-between; height:100%; padding:0 8px; gap:6px; }
+.split-val{ font-family:'Calibri','Segoe UI',Arial,sans-serif; font-weight:700; font-size:11.5px; text-align:left; white-space:nowrap; }
+.split-div{ width:1px; align-self:stretch; margin:6px 0; background:rgba(30,59,92,0.35); flex-shrink:0; }
+.split-pct{ font-family:'Calibri','Segoe UI',Arial,sans-serif; font-weight:700; font-size:11.5px; text-align:right; white-space:nowrap; }
+
+tr.daily-total-row td{ border-top:2px solid var(--brand-dark-blue); }
+td.daily-total-head{
+  background:var(--panel); text-align:left; padding:6px 10px; font-size:11px; font-weight:700; color:var(--brand-dark-blue);
+  white-space:nowrap; position:sticky; left:0; z-index:1; text-transform:uppercase; letter-spacing:0.04em;
+}
+td.daily-total-cell{ padding:0; font-size:11px; min-width:100px; font-weight:700; height:34px; }
+td.daily-total-cell.empty{ padding:6px 10px; text-align:right; }
+
+tr.group-spacer td{ background:var(--brand-dark-blue); padding:0; height:10px; border:none; }
+
+.legend-row{ display:flex; gap:16px; align-items:center; padding:14px 0 4px; font-size:10.5px; color:var(--muted); }
+.legend-row .sw{ width:10px; height:10px; border-radius:2px; display:inline-block; margin-right:5px; vertical-align:-1px; }
+
+footer{ text-align:center; color:var(--muted); font-size:11px; padding:20px 0 30px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand-logo"><img src="data:image/png;base64,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" alt="Cavron Global"></div>
+    <h1>DAILY <span class="accent">OUTPUT</span> MONITORING</h1>
+    <div class="sub">Line Performance by day of the selected week</div>
+    <div class="week-nav">
+      <button id="prevWeek">&larr;</button>
+      <select id="weekSelect"></select>
+      <button id="nextWeek">&rarr;</button>
+      <button id="refreshData" title="Reload from Google Sheets">&#8635;</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div id="statusBar" style="text-align:center; padding:10px; font-size:12.5px; color:var(--muted);"></div>
+  <table class="matrix" id="matrixTable"></table>
+  <div class="legend-row">
+    <span><span class="sw" style="background:#CBE8D9; border:1px solid #6FAE8D"></span>&ge;100% of target</span>
+    <span><span class="sw" style="background:#F5E6BE; border:1px solid #C9A227"></span>85&ndash;99%</span>
+    <span><span class="sw" style="background:#F3CFC7; border:1px solid #C0503C"></span>&lt;85%</span>
+    <span><span class="sw" style="background:transparent; border:1px dashed var(--line);"></span>No shift logged</span>
+  </div>
+</div>
+
+<footer>Cell shows output and % of that shift's target (kg, or pcs for Bag Making) · Week total = sum for the week, % = average of days logged</footer>
+
+<script>
+let DATA = null;
+
+function fmt(n){ if(n===null||n===undefined) return '-'; return Math.round(n).toLocaleString('en-US'); }
+function bandText(pct){
+  if(pct===null||pct===undefined) return '#4b627d';
+  if(pct >= 100) return '#1E7A4F';
+  if(pct >= 85) return '#8A6A0F';
+  return '#B23B2E';
+}
+function bandBgSolid(pct){
+  if(pct===null||pct===undefined) return 'transparent';
+  if(pct >= 100) return '#CBE8D9';
+  if(pct >= 85) return '#F5E6BE';
+  return '#F3CFC7';
+}
+function dowShort(iso){ const dt=new Date(iso+'T00:00:00'); return dt.toLocaleDateString('en-US',{weekday:'short'}); }
+function ddShort(iso){ const dt=new Date(iso+'T00:00:00'); return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'}); }
+
+/* ===================== LIVE DATA PIPELINE ===================== */
+/* Pulls straight from the published Google Sheet CSVs and applies the
+   same cleaning rules as the original Python pipeline:
+   - trust each row's own "Week" column
+   - fix the Sunday-tagged-to-next-week boundary drift
+   - fix 1000-year typos (e.g. 3026 -> 2026)
+   - drop genuine stray rows (a full year+ outside the reporting window)
+   - ceil() all weights, exclude blank/missing weights from stats
+   - Ready Mix Line 3 excluded entirely */
+
+const SOURCES = [
+  { key:'screaning',  label:'F1 - Screening Charcoal Dust',        target:15000, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=0&single=true&output=csv', cols:{week:0,date:1,shift:2,val:5} },
+  { key:'cruiser',    label:'F1 - Crusher Candle Nut Charcoal',    target:8000,  url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1499632699&single=true&output=csv', cols:{week:0,date:1,shift:2,val:6} },
+  { key:'woodline',   label:'F1 - Crusher Wood Charcoal',          target:6000,  url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=143607530&single=true&output=csv', cols:{week:0,date:1,shift:2,val:5} },
+  { key:'readymix',   label:null, target:20000, isReadyMix:true, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=560704222&single=true&output=csv', cols:{week:0,date:1,shift:2,line:3,val:5} },
+  { key:'briquettes', label:'Briquettes Line Factory 2',           target:32000, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1694376471&single=true&output=csv', cols:{week:0,date:1,shift:2,val:4} },
+  { key:'bagmaking',  label:'F3 - Bag Making',                     target:6000,  unit:'pcs', url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=808318571&single=true&output=csv', cols:{week:0,date:1,shift:2,val:4} },
+  { key:'packing',    label:'F4 - Packing Line',                   target:25000, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1228034420&single=true&output=csv', cols:{week:0,date:1,shift:2,val:4} },
+];
+
+// Wide-format weekly targets sheet: one row per week, one column per line.
+// Fill this in once you have the published CSV link for that tab.
+const WEEKLY_TARGETS_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=581369485&single=true&output=csv';
+
+const GROUP_ORDER = [
+  { key:'screaning',   label:'F1 - Screening Charcoal Dust',     target:15000 },
+  { key:'cruiser',     label:'F1 - Crusher Candle Nut Charcoal', target:8000  },
+  { key:'woodline',    label:'F1 - Crusher Wood Charcoal',       target:6000  },
+  { key:'readymix_l1', label:'F2 - Ready Mix Line 1',            target:20000 },
+  { key:'readymix_l2', label:'F2 - Ready Mix Line 2',            target:20000 },
+  { key:'briquettes',  label:'Briquettes Line Factory 2',        target:32000 },
+  { key:'bagmaking',   label:'F3 - Bag Making',                  target:6000, unit:'pcs' },
+  { key:'packing',     label:'F4 - Packing Line',                target:25000 },
+];
+
+const BASE_MONDAY_UTC = Date.UTC(2025, 11, 29); // canonical Monday for week 1
+const MONTH_ABBR = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+
+function canonicalMondayUTC(week){ return BASE_MONDAY_UTC + (week-1)*7*86400000; }
+
+// Parse dates like "2-Jan-2026", "30 May-2026", or ambiguous "8/4/2026" /
+// "10/07/2026" slash dates. For slash dates, tries both day/month orderings
+// and picks whichever lands inside (or near) the row's reported week window,
+// since the sheet mixes both conventions.
+function parseProdDate(raw, week){
+  if(!raw) return null;
+  const s = String(raw).trim();
+  let m = s.match(/^(\d{1,2})[\s\-]([A-Za-z]{3,})[\s\-](\d{4})$/);
+  if(m){
+    const day = parseInt(m[1]);
+    const mon = MONTH_ABBR[m[2].slice(0,3).toLowerCase()];
+    const year = parseInt(m[3]);
+    if(mon===undefined) return null;
+    return Date.UTC(year, mon, day);
+  }
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(m){
+    const a = parseInt(m[1]), b = parseInt(m[2]), year = parseInt(m[3]);
+    const candA = Date.UTC(year, a-1, b); // month/day
+    const candB = Date.UTC(year, b-1, a); // day/month
+    if(week){
+      const cmon = canonicalMondayUTC(week);
+      const lo = cmon - 5*86400000, hi = cmon + 11*86400000; // generous window
+      const aFits = candA>=lo && candA<=hi;
+      const bFits = candB>=lo && candB<=hi;
+      if(aFits && !bFits) return candA;
+      if(bFits && !aFits) return candB;
+    }
+    return candB; // default: day/month (Indonesian convention)
+  }
+  const generic = Date.parse(s);
+  return isNaN(generic) ? null : generic;
+}
+
+async function fetchCsvRows(url){
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const text = await res.text();
+  const parsed = Papa.parse(text, {skipEmptyLines:false});
+  return parsed.data;
+}
+
+// Maps a header cell like "Screening" / "Crushing Candle Nut" / "Ready Mix"
+// to our internal line keys. "readymix" is the COMBINED target for both
+// Ready Mix lines together, not split per sub-line.
+function headerToTargetKey(h){
+  const s = (h||'').toString().trim().toLowerCase();
+  if(!s) return null;
+  if(s.includes('screen')) return 'screaning';
+  if(s.includes('ready mix') || s.includes('readymix')) return 'readymix';
+  if(s.includes('briquette')) return 'briquettes';
+  if(s.includes('crush') || s.includes('candle')) return 'cruiser';
+  if(s.includes('wood')) return 'woodline';
+  if(s.includes('bag')) return 'bagmaking';
+  if(s.includes('pack')) return 'packing';
+  return null;
+}
+
+function parseTargetNumber(raw){
+  if(raw===undefined || raw===null) return null;
+  const s = raw.toString().trim().replace(/,/g,'');
+  if(s==='') return null;
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+// Parses the wide-format Weekly Targets tab: one row per week, one column
+// per line. Returns { week: { screaning, cruiser, woodline, briquettes, readymix } }
+function parseWeeklyTargets(rows){
+  const out = {};
+  if(!rows || rows.length===0) return out;
+  let headerIdx = -1;
+  for(let i=0;i<rows.length;i++){
+    const cell = (rows[i][0]||'').toString().trim().toLowerCase();
+    if(cell==='week'){ headerIdx = i; break; }
+  }
+  if(headerIdx===-1) return out;
+  const header = rows[headerIdx];
+  const colMap = {}; // colIndex -> targetKey
+  for(let c=1;c<header.length;c++){
+    const key = headerToTargetKey(header[c]);
+    if(key) colMap[c] = key;
+  }
+  for(let i=headerIdx+1;i<rows.length;i++){
+    const r = rows[i];
+    if(!r || r.length===0) continue;
+    const week = parseInt((r[0]||'').toString().trim());
+    if(isNaN(week)) continue;
+    out[week] = out[week] || {};
+    for(const c of Object.keys(colMap)){
+      const val = parseTargetNumber(r[c]);
+      if(val!==null) out[week][colMap[c]] = val;
+    }
+  }
+  return out;
+}
+
+function processSource(source, rows, out){
+  const c = source.cols;
+  let headerIdx = -1;
+  for(let i=0;i<rows.length;i++){
+    const cell = (rows[i][c.week]||'').toString().trim().toLowerCase();
+    if(cell.startsWith('week')){ headerIdx = i; break; }
+  }
+  if(headerIdx===-1) throw new Error('Header row not found for '+source.key);
+
+  for(let i=headerIdx+1;i<rows.length;i++){
+    const r = rows[i];
+    if(!r || r.length===0) continue;
+    const rawWeek = (r[c.week]||'').toString().trim();
+    const rawDate = (r[c.date]||'').toString().trim();
+    const rawShift = (r[c.shift]||'').toString().trim();
+    const rawVal = (r[c.val]||'').toString().trim();
+    if(!rawDate || !rawShift || rawVal==='') continue;
+    const val = parseFloat(rawVal);
+    if(isNaN(val)) continue;
+    const week = parseInt(rawWeek);
+    if(isNaN(week)) continue;
+
+    let dUTC = parseProdDate(rawDate, week);
+    if(dUTC===null) continue;
+
+    // fix obvious 1000-year typo (e.g. 3026 -> 2026)
+    let dt = new Date(dUTC);
+    if(dt.getUTCFullYear() >= 2900){
+      dUTC = Date.UTC(dt.getUTCFullYear()-1000, dt.getUTCMonth(), dt.getUTCDate());
+      dt = new Date(dUTC);
+    }
+
+    // fix week-boundary drift: a Sunday tagged as belonging to the *next*
+    // Monday-Sunday week actually belongs to the previous week's Sunday
+    let effWeek = week;
+    let cmon = canonicalMondayUTC(effWeek);
+    if(dUTC === cmon - 86400000){
+      effWeek = effWeek - 1;
+      cmon = canonicalMondayUTC(effWeek);
+    }
+
+    // drop genuine stray rows: a full year (or more) outside the reporting window
+    if(dUTC < Date.UTC(2025,10,1) || dUTC > Date.UTC(2026,8,1)) continue;
+
+    const shift = String(parseInt(rawShift));
+    const value = Math.ceil(val);
+    const dateStr = dt.toISOString().slice(0,10);
+
+    let gkey = source.key;
+    if(source.isReadyMix){
+      const line = parseInt((r[c.line]||'').toString().trim());
+      if(line===3) continue; // Ready Mix Line 3 no longer displayed
+      if(line!==1 && line!==2) continue;
+      gkey = 'readymix_l'+line;
+    }
+
+    out.push([gkey, effWeek, shift, dateStr, value]);
+  }
+}
+
+function buildData(rows){
+  const cellSums = {}; // week -> gkey -> shift -> date -> sum
+  for(const [gkey, week, shift, dateStr, value] of rows){
+    cellSums[week] = cellSums[week] || {};
+    cellSums[week][gkey] = cellSums[week][gkey] || {'1':{}, '2':{}, '3':{}};
+    cellSums[week][gkey][shift][dateStr] = (cellSums[week][gkey][shift][dateStr]||0) + value;
+  }
+  const allWeeks = Object.keys(cellSums).map(Number).sort((a,b)=>a-b);
+  const weekDays = {}, cells = {}, rowTotals = {};
+
+  for(const w of allWeeks){
+    const ws = String(w);
+    const cmon = canonicalMondayUTC(w);
+    weekDays[ws] = Array.from({length:7}, (_,i)=> new Date(cmon+i*86400000).toISOString().slice(0,10));
+    cells[ws] = {}; rowTotals[ws] = {};
+    for(const g of GROUP_ORDER){
+      const shiftsData = (cellSums[w]||{})[g.key] || {'1':{}, '2':{}, '3':{}};
+      cells[ws][g.key] = {}; rowTotals[ws][g.key] = {};
+      for(const shift of ['1','2','3']){
+        const dayVals = shiftsData[shift] || {};
+        const dayCells = {};
+        let total = 0, ndays = 0;
+        for(const dateStr of Object.keys(dayVals).sort()){
+          const v = Math.round(dayVals[dateStr]);
+          const pct = Math.round((v/g.target*100)*10)/10;
+          dayCells[dateStr] = {value:v, pct:pct};
+          total += v; ndays += 1;
+        }
+        cells[ws][g.key][shift] = dayCells;
+        if(ndays>0){
+          const pctTotal = Math.round((total/(g.target*ndays)*100)*10)/10;
+          rowTotals[ws][g.key][shift] = {total:total, pct:pctTotal, days:ndays};
+        } else {
+          rowTotals[ws][g.key][shift] = {total:null, pct:null, days:0};
+        }
+      }
+    }
+  }
+
+  return {
+    allWeeks: allWeeks,
+    weekDays: weekDays,
+    groups: GROUP_ORDER.map(g=>({key:g.key, label:g.label, target:g.target, unit:g.unit||'kg'})),
+    cells: cells,
+    rowTotals: rowTotals,
+  };
+}
+
+const statusBar = document.getElementById('statusBar');
+const refreshBtn = document.getElementById('refreshData');
+
+async function loadData(){
+  refreshBtn.classList.add('spinning');
+  statusBar.className = '';
+  statusBar.textContent = 'Loading latest data from Google Sheets…';
+  const allRows = [];
+  const failed = [];
+  for(const source of SOURCES){
+    try{
+      const rows = await fetchCsvRows(source.url);
+      processSource(source, rows, allRows);
+    }catch(e){
+      failed.push(source.key);
+      console.error('Failed to load', source.key, e);
+    }
+  }
+  let weeklyTargets = {};
+  if(WEEKLY_TARGETS_URL){
+    try{
+      const targetRows = await fetchCsvRows(WEEKLY_TARGETS_URL);
+      weeklyTargets = parseWeeklyTargets(targetRows);
+    }catch(e){
+      failed.push('WeeklyTargets');
+      console.error('Failed to load weekly targets', e);
+    }
+  }
+  refreshBtn.classList.remove('spinning');
+  if(allRows.length===0){
+    statusBar.className = 'error';
+    statusBar.textContent = 'Could not load any data — check the Sheets are still published to web, or your network/sharing settings.';
+    return;
+  }
+  DATA = buildData(allRows);
+  DATA.weeklyTargets = weeklyTargets;
+  if(failed.length){
+    statusBar.className = 'error';
+    statusBar.textContent = 'Loaded, but could not reach: ' + failed.join(', ') + ' — showing the other lines only.';
+  } else {
+    const now = new Date();
+    statusBar.textContent = 'Live data — last refreshed ' + now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+  }
+  initUI();
+}
+
+let weekSelect, weeks, currentIdx;
+
+function initUI(){
+  weekSelect = document.getElementById('weekSelect');
+  weeks = DATA.allWeeks;
+  weekSelect.innerHTML = '';
+  weeks.forEach(w=>{
+    const opt = document.createElement('option');
+    opt.value = w; opt.textContent = 'Week '+w;
+    weekSelect.appendChild(opt);
+  });
+  currentIdx = weeks.length ? weeks.length-1 : 0; // land on the most recent week
+  weekSelect.value = weeks[currentIdx];
+  document.getElementById('prevWeek').onclick = ()=>{ if(currentIdx>0){currentIdx--; weekSelect.value=weeks[currentIdx]; render();} };
+  document.getElementById('nextWeek').onclick = ()=>{ if(currentIdx<weeks.length-1){currentIdx++; weekSelect.value=weeks[currentIdx]; render();} };
+  weekSelect.onchange = ()=>{ currentIdx = weeks.indexOf(parseInt(weekSelect.value)); render(); };
+  render();
+}
+
+refreshBtn.onclick = loadData;
+
+function render(){
+  const w = weeks[currentIdx];
+  document.getElementById('prevWeek').disabled = currentIdx===0;
+  document.getElementById('nextWeek').disabled = currentIdx===weeks.length-1;
+
+  const days = DATA.weekDays[String(w)];
+  const table = document.getElementById('matrixTable');
+  table.innerHTML = '';
+
+  // Header
+  const thead = document.createElement('thead');
+  const htr = document.createElement('tr');
+  htr.innerHTML = `<th colspan="2" style="min-width:230px;">MACHINE / SHIFT</th>` +
+    days.map(d=>`<th><span class="dow">${dowShort(d)}</span><span class="dd">${ddShort(d)}</span></th>`).join('') +
+    `<th class="total-head">WEEK<br>TOTAL</th>` +
+    `<th class="total-head">WEEKLY<br>TARGET</th>`;
+  thead.appendChild(htr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  const groupWeekSums = {};
+
+  DATA.groups.forEach((g, gi)=>{
+    const cellsForGroup = DATA.cells[String(w)][g.key] || {};
+    const totalsForGroup = DATA.rowTotals[String(w)][g.key] || {};
+    const targetKey = (g.key==='readymix_l1' || g.key==='readymix_l2') ? null : g.key;
+    const weekTargets = (DATA.weeklyTargets && DATA.weeklyTargets[w]) || {};
+    const realTarget = targetKey ? weekTargets[targetKey] : undefined;
+    const hasRealTarget = realTarget !== undefined && realTarget !== null;
+    [1,2,3].forEach((shift, si)=>{
+      const tr = document.createElement('tr');
+      let rowHtml = '';
+      if(si===0){
+        rowHtml += `<td class="rowhead" rowspan="3">${g.label}<div style="font-weight:400; color:var(--muted); font-size:13px; margin-top:3px;">target ${fmt(g.target)} ${g.unit||'kg'}/shift</div></td>`;
+      }
+      rowHtml += `<td class="shifthead">Shift ${shift}</td>`;
+
+      days.forEach(day=>{
+        const rec = (cellsForGroup[String(shift)] || {})[day];
+        if(rec){
+          rowHtml += `<td class="cell" style="background:${bandBgSolid(rec.pct)};">
+            <div class="split-row">
+              <span class="split-val" style="color:${bandText(rec.pct)}">${fmt(rec.value)}</span>
+              <span class="split-div"></span>
+              <span class="split-pct" style="color:${bandText(rec.pct)}">${rec.pct}%</span>
+            </div>
+          </td>`;
+        } else {
+          rowHtml += `<td class="cell empty">&mdash;</td>`;
+        }
+      });
+
+      const tot = totalsForGroup[String(shift)];
+      if(tot && tot.total!==null){
+        rowHtml += `<td class="total-cell" style="background:${bandBgSolid(tot.pct)};">
+          <div class="split-row">
+            <span class="split-val" style="color:${bandText(tot.pct)}">${fmt(tot.total)}</span>
+            <span class="split-div"></span>
+            <span class="split-pct" style="color:${bandText(tot.pct)}">${tot.pct}%</span>
+          </div>
+        </td>`;
+      } else {
+        rowHtml += `<td class="total-cell empty">&mdash;</td>`;
+      }
+      // Weekly Target is a line-level concept (real management target), not
+      // a per-shift one — shown once, spanning the 3 shift rows.
+      if(si===0){
+        if(hasRealTarget){
+          rowHtml += `<td class="target-static-cell" rowspan="3">${fmt(realTarget)}</td>`;
+        } else {
+          rowHtml += `<td class="target-static-cell empty" rowspan="3">&mdash;</td>`;
+        }
+      }
+
+      tr.innerHTML = rowHtml;
+      tbody.appendChild(tr);
+    });
+
+    // Daily Total row: sum of all shifts logged that day, for this line
+    const trTotal = document.createElement('tr');
+    trTotal.className = 'daily-total-row';
+    let totalRowHtml = `<td class="daily-total-head" colspan="2">Daily Total</td>`;
+    let weekSum = 0, weekShiftCount = 0;
+    const dayVals = {}; // day -> sum, kept for the Ready Mix combine step below
+    days.forEach(day=>{
+      let daySum = 0, dayCount = 0;
+      [1,2,3].forEach(shift=>{
+        const rec = (cellsForGroup[String(shift)] || {})[day];
+        if(rec){ daySum += rec.value; dayCount++; }
+      });
+      dayVals[day] = daySum;
+      if(dayCount>0){
+        const dayPct = Math.round((daySum/(g.target*dayCount))*1000)/10;
+        weekSum += daySum; weekShiftCount += dayCount;
+        totalRowHtml += `<td class="daily-total-cell" style="background:${bandBgSolid(dayPct)};">
+          <div class="split-row">
+            <span class="split-val" style="color:${bandText(dayPct)}">${fmt(daySum)}</span>
+            <span class="split-div"></span>
+            <span class="split-pct" style="color:${bandText(dayPct)}">${dayPct}%</span>
+          </div>
+        </td>`;
+      } else {
+        totalRowHtml += `<td class="daily-total-cell empty">&mdash;</td>`;
+      }
+    });
+    if(weekShiftCount>0){
+      const weekPct = Math.round((weekSum/(g.target*weekShiftCount))*1000)/10;
+      totalRowHtml += `<td class="total-cell daily-total-cell" style="background:${bandBgSolid(weekPct)};">
+        <div class="split-row">
+          <span class="split-val" style="color:${bandText(weekPct)}">${fmt(weekSum)}</span>
+          <span class="split-div"></span>
+          <span class="split-pct" style="color:${bandText(weekPct)}">${weekPct}%</span>
+        </div>
+      </td>`;
+    } else {
+      totalRowHtml += `<td class="total-cell daily-total-cell empty">&mdash;</td>`;
+    }
+
+    // Weekly Target column here shows only the achievement % against the
+    // real target (the raw target number itself is shown once, spanning
+    // the 3 shift rows above). Ready Mix Line 1 / Line 2 don't get an
+    // individual target — theirs is combined into the "Ready Mix Total" row.
+    if(hasRealTarget){
+      const achievePct = Math.round((weekSum/realTarget)*1000)/10;
+      totalRowHtml += `<td class="target-cell daily-total-cell" style="background:${bandBgSolid(achievePct)};">
+        <span class="target-pct-only" style="color:${bandText(achievePct)}">${achievePct}%</span>
+      </td>`;
+    } else {
+      totalRowHtml += `<td class="target-cell daily-total-cell empty">&mdash;</td>`;
+    }
+    trTotal.innerHTML = totalRowHtml;
+    tbody.appendChild(trTotal);
+    groupWeekSums[g.key] = { dayVals, weekSum };
+
+    // Combined Ready Mix row: Line 1 + Line 2 together, checked against the
+    // single combined Ready Mix target (management sets one number for both).
+    if(g.key === 'readymix_l2'){
+      const l1 = groupWeekSums['readymix_l1'] || { dayVals:{}, weekSum:0 };
+      const l2 = groupWeekSums['readymix_l2'] || { dayVals:{}, weekSum:0 };
+      const trCombine = document.createElement('tr');
+      trCombine.className = 'daily-total-row combine-row';
+      let combineHtml = `<td class="daily-total-head" colspan="2">Ready Mix Total<br>(Line 1 + Line 2)</td>`;
+      let combineWeekSum = 0;
+      days.forEach(day=>{
+        const daySum = (l1.dayVals[day]||0) + (l2.dayVals[day]||0);
+        combineWeekSum += daySum;
+        if(daySum>0){
+          combineHtml += `<td class="daily-total-cell"><div class="split-row"><span class="split-val">${fmt(daySum)}</span></div></td>`;
+        } else {
+          combineHtml += `<td class="daily-total-cell empty">&mdash;</td>`;
+        }
+      });
+      combineHtml += `<td class="total-cell daily-total-cell"><div class="split-row"><span class="split-val">${fmt(combineWeekSum)}</span></div></td>`;
+      const rmTarget = weekTargets['readymix'];
+      if(rmTarget !== undefined && rmTarget !== null){
+        const achievePct = Math.round((combineWeekSum/rmTarget)*1000)/10;
+        combineHtml += `<td class="target-cell daily-total-cell" style="background:${bandBgSolid(achievePct)};">
+          <div class="split-row">
+            <span class="split-val" style="color:${bandText(achievePct)}; font-size:13px;">${fmt(rmTarget)}</span>
+            <span class="split-div"></span>
+            <span class="split-pct" style="color:${bandText(achievePct)}; font-size:13px;">${achievePct}%</span>
+          </div>
+        </td>`;
+      } else {
+        combineHtml += `<td class="target-cell daily-total-cell empty">&mdash;</td>`;
+      }
+      trCombine.innerHTML = combineHtml;
+      tbody.appendChild(trCombine);
+    }
+
+    // Spacer row between production lines
+    if(gi < DATA.groups.length - 1){
+      const trSpacer = document.createElement('tr');
+      trSpacer.className = 'group-spacer';
+      trSpacer.innerHTML = `<td colspan="${4 + days.length}"></td>`;
+      tbody.appendChild(trSpacer);
+    }
+  });
+
+  table.appendChild(tbody);
+}
+
+loadData();
+</script>
+</body>
+</html>
