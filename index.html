@@ -512,7 +512,10 @@ function buildData(rows, dayTargets){
   return {
     allWeeks: allWeeks,
     weekDays: weekDays,
-    groups: GROUP_ORDER.map(g=>({key:g.key, label:g.label, target:g.target, unit:g.unit||'kg', noShifts:!!g.noShifts})),
+    groups: GROUP_ORDER.map(g=>({
+      key:g.key, label:g.label, target:g.target, unit:g.unit||'kg', noShifts:!!g.noShifts,
+      isShipment:!!g.isShipment, noWeeklyTarget:!!g.noWeeklyTarget, subtitleOverride:g.subtitleOverride
+    })),
     cells: cells,
     rowTotals: rowTotals,
     dayTargetsRaw: dayTargets,
