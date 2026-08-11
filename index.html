@@ -64,6 +64,8 @@ td.shifthead{
 td.cell{ padding:0; font-size:11px; min-width:100px; height:34px; }
 td.cell.empty{ color:var(--muted); opacity:0.35; padding:6px 3px; text-align:center; }
 td.total-cell{ background:var(--panel); font-weight:700; height:34px; padding:0; }
+td.cell.plan-cell, td.total-cell.plan-cell{ color:var(--muted); font-style:italic; font-weight:600; font-size:12px; }
+td.cell.actual-cell, td.total-cell.actual-cell{ color:var(--brand-dark-blue); font-weight:700; font-size:12.5px; }
 td.target-cell{ background:var(--panel); font-weight:700; height:34px; padding:0; }
 td.target-cell.empty{ color:var(--muted); opacity:0.35; padding:6px 10px; text-align:center; font-weight:600; font-size:12.5px; }
 .target-pct-only{ font-family:'Calibri','Segoe UI',Arial,sans-serif; font-weight:700; font-size:13.5px; }
@@ -160,7 +162,7 @@ const SOURCES = [
   { key:'readymix',   label:null, target:20000, isReadyMix:true, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=560704222&single=true&output=csv', cols:{week:0,date:1,shift:2,line:3,val:5} },
   { key:'briquettes', label:'Briquettes Line Factory 2',           target:32000, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1694376471&single=true&output=csv', cols:{week:0,date:1,shift:2,val:4} },
   { key:'bagmaking',  label:'F3 - Bag Making', target:null, unit:'pcs', noShifts:true, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=808318571&single=true&output=csv', cols:{week:0,date:2,planning:3,val:4} },
-  { key:'packing',    label:'F4 - Packing Line',                   target:25000, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1228034420&single=true&output=csv', cols:{week:0,date:1,shift:2,val:4} },
+  { key:'packing',    label:null, target:25000, isPackingLine:true, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1228034420&single=true&output=csv', cols:{week:0,date:1,shift:2,line:3,val:5} },
 ];
 
 // Wide-format weekly targets sheet: one row per week, one column per line.
@@ -175,7 +177,9 @@ const GROUP_ORDER = [
   { key:'readymix_l2', label:'F2 - Ready Mix Line 2',            target:20000 },
   { key:'briquettes',  label:'Briquettes Line Factory 2',        target:32000 },
   { key:'bagmaking',   label:'F3 - Bag Making',                  target:null, unit:'pcs', noShifts:true },
-  { key:'packing',     label:'F4 - Packing Line',                target:25000 },
+  { key:'packing_l1',  label:'F4 - Packing Line 1',              target:25000, noWeeklyTarget:true, subtitleOverride:'Briquettes Packing Line' },
+  { key:'packing_l2',  label:'F4 - Packing Line 2',              target:25000, noWeeklyTarget:true, subtitleOverride:'Briquettes Packing Line' },
+  { key:'packing_l3',  label:'F4 - Packing Line 3',              target:25000, noWeeklyTarget:true, subtitleOverride:'Lump Wood Packing Line' },
 ];
 
 const BASE_MONDAY_UTC = Date.UTC(2025, 11, 29); // canonical Monday for week 1
@@ -246,7 +250,6 @@ function headerToTargetKey(h){
   if(s.includes('crush') || s.includes('candle')) return 'cruiser';
   if(s.includes('wood')) return 'woodline';
   if(s.includes('bag')) return 'bagmaking';
-  if(s.includes('pack')) return 'packing';
   return null;
 }
 
@@ -338,11 +341,11 @@ function processSource(source, rows, out, dayTargetsOut){
     const dateStr = dt.toISOString().slice(0,10);
 
     let gkey = source.key;
-    if(source.isReadyMix){
+    if(source.isReadyMix || source.isPackingLine){
       const line = parseInt((r[c.line]||'').toString().trim());
-      if(line===3) continue; // Ready Mix Line 3 no longer displayed
-      if(line!==1 && line!==2) continue;
-      gkey = 'readymix_l'+line;
+      if(source.isReadyMix && line===3) continue; // Ready Mix Line 3 no longer displayed
+      if(line<1 || line>3) continue;
+      gkey = (source.isReadyMix ? 'readymix_l' : 'packing_l') + line;
     }
 
     out.push([gkey, effWeek, shift, dateStr, value]);
@@ -387,15 +390,15 @@ function buildData(rows, dayTargets){
         let total = 0, ndays = 0, targetSum = 0, targetDays = 0;
         for(const dateStr of Object.keys(dayVals).sort()){
           const v = Math.round(dayVals[dateStr]);
-          let pct;
+          let pct, dTarget = null;
           if(g.noShifts){
-            const dTarget = (dayTargets[w] && dayTargets[w][g.key] && dayTargets[w][g.key][dateStr]) || null;
+            dTarget = (dayTargets[w] && dayTargets[w][g.key] && dayTargets[w][g.key][dateStr]) || null;
             pct = dTarget ? Math.round((v/dTarget*100)*10)/10 : null;
             if(dTarget){ targetSum += dTarget; targetDays++; }
           } else {
             pct = Math.round((v/g.target*100)*10)/10;
           }
-          dayCells[dateStr] = {value:v, pct:pct};
+          dayCells[dateStr] = {value:v, pct:pct, target:(g.noShifts?dTarget:undefined)};
           total += v; ndays += 1;
         }
         cells[ws][g.key][shift] = dayCells;
@@ -425,6 +428,7 @@ function buildData(rows, dayTargets){
     groups: GROUP_ORDER.map(g=>({key:g.key, label:g.label, target:g.target, unit:g.unit||'kg', noShifts:!!g.noShifts})),
     cells: cells,
     rowTotals: rowTotals,
+    dayTargetsRaw: dayTargets,
   };
 }
 
@@ -524,24 +528,82 @@ function render(){
     const targetKey = (g.key==='readymix_l1' || g.key==='readymix_l2') ? null : g.key;
     const weekTargets = (DATA.weeklyTargets && DATA.weeklyTargets[w]) || {};
     let realTarget;
-    if(g.noShifts){
+    if(g.noWeeklyTarget){
+      realTarget = undefined;
+    } else if(g.noShifts){
       const tot1 = totalsForGroup['1'];
       realTarget = (tot1 && tot1.targetSum) ? tot1.targetSum : undefined;
     } else {
       realTarget = targetKey ? weekTargets[targetKey] : undefined;
     }
     const hasRealTarget = realTarget !== undefined && realTarget !== null;
-    const shiftList = g.noShifts ? [1] : [1,2,3];
+
+    // Bag Making: no shifts, and the "target" is a per-day Planning figure
+    // rather than a fixed number — shown as 3 rows (Daily Plan / Actual
+    // output / Percentage) instead of the usual Shift 1/2/3 + Daily Total.
+    if(g.noShifts){
+      const tot1 = totalsForGroup['1'] || {total:null, pct:null, days:0, targetSum:0};
+      const rowDefs = [
+        { label:'Daily Plan', kind:'plan' },
+        { label:'Actual Output', kind:'actual' },
+        { label:'Percentage', kind:'pct' },
+      ];
+      rowDefs.forEach((rd, ri)=>{
+        const tr = document.createElement('tr');
+        let rowHtml = '';
+        if(ri===0){
+          rowHtml += `<td class="rowhead" rowspan="3">${g.label}<div style="font-weight:400; color:var(--muted); font-size:13px; margin-top:3px;">Daily Target depend on bag size</div></td>`;
+        }
+        rowHtml += `<td class="shifthead">${rd.label}</td>`;
+        days.forEach(day=>{
+          const rec = (cellsForGroup['1'] || {})[day];
+          const dTarget = (rec && rec.target!==undefined && rec.target!==null) ? rec.target
+            : ((DATA.dayTargetsRaw && DATA.dayTargetsRaw[w] && DATA.dayTargetsRaw[w][g.key] && DATA.dayTargetsRaw[w][g.key][day]) || null);
+          if(rd.kind==='plan'){
+            rowHtml += dTarget!==null ? `<td class="cell plan-cell">${fmt(dTarget)}</td>` : `<td class="cell empty">&mdash;</td>`;
+          } else if(rd.kind==='actual'){
+            rowHtml += rec ? `<td class="cell actual-cell">${fmt(rec.value)}</td>` : `<td class="cell empty">&mdash;</td>`;
+          } else {
+            if(rec && rec.pct!==null){
+              rowHtml += `<td class="cell" style="background:${bandBgSolid(rec.pct)};"><span class="target-pct-only" style="color:${bandText(rec.pct)}">${rec.pct}%</span></td>`;
+            } else {
+              rowHtml += `<td class="cell empty">&mdash;</td>`;
+            }
+          }
+        });
+        if(rd.kind==='plan'){
+          rowHtml += tot1.targetSum ? `<td class="total-cell plan-cell">${fmt(tot1.targetSum)}</td>` : `<td class="total-cell empty">&mdash;</td>`;
+        } else if(rd.kind==='actual'){
+          rowHtml += (tot1.total!==null) ? `<td class="total-cell actual-cell">${fmt(tot1.total)}</td>` : `<td class="total-cell empty">&mdash;</td>`;
+        } else {
+          rowHtml += (tot1.pct!==null) ? `<td class="total-cell" style="background:${bandBgSolid(tot1.pct)};"><span class="target-pct-only" style="color:${bandText(tot1.pct)}">${tot1.pct}%</span></td>` : `<td class="total-cell empty">&mdash;</td>`;
+        }
+        if(ri===0){
+          rowHtml += hasRealTarget
+            ? `<td class="target-static-cell" rowspan="3">${fmt(realTarget)}</td>`
+            : `<td class="target-static-cell empty" rowspan="3">&mdash;</td>`;
+        }
+        tr.innerHTML = rowHtml;
+        tbody.appendChild(tr);
+      });
+      if(gi < DATA.groups.length - 1){
+        const trSpacer = document.createElement('tr');
+        trSpacer.className = 'group-spacer';
+        trSpacer.innerHTML = `<td colspan="${4 + days.length}"></td>`;
+        tbody.appendChild(trSpacer);
+      }
+      return;
+    }
+
+    const shiftList = [1,2,3];
     shiftList.forEach((shift, si)=>{
       const tr = document.createElement('tr');
       let rowHtml = '';
       if(si===0){
-        const subtitle = g.noShifts
-          ? `target set daily (see Weekly Target)`
-          : `target ${fmt(g.target)} ${g.unit||'kg'}/shift`;
+        const subtitle = g.subtitleOverride || `target ${fmt(g.target)} ${g.unit||'kg'}/shift`;
         rowHtml += `<td class="rowhead" rowspan="${shiftList.length}">${g.label}<div style="font-weight:400; color:var(--muted); font-size:13px; margin-top:3px;">${subtitle}</div></td>`;
       }
-      rowHtml += `<td class="shifthead">${g.noShifts ? 'Daily' : ('Shift '+shift)}</td>`;
+      rowHtml += `<td class="shifthead">Shift ${shift}</td>`;
 
       days.forEach(day=>{
         const rec = (cellsForGroup[String(shift)] || {})[day];
@@ -583,20 +645,6 @@ function render(){
       tr.innerHTML = rowHtml;
       tbody.appendChild(tr);
     });
-
-    // No-shift lines (e.g. Bag Making) already show their one and only row
-    // above with its own Week Total + Weekly Target — a second "Daily Total"
-    // row would just repeat the same numbers, so skip it.
-    if(g.noShifts){
-      groupWeekSums[g.key] = { dayVals: {}, weekSum: (totalsForGroup['1'] && totalsForGroup['1'].total) || 0 };
-      if(gi < DATA.groups.length - 1){
-        const trSpacer = document.createElement('tr');
-        trSpacer.className = 'group-spacer';
-        trSpacer.innerHTML = `<td colspan="${4 + days.length}"></td>`;
-        tbody.appendChild(trSpacer);
-      }
-      return;
-    }
 
     // Daily Total row: sum of all shifts logged that day, for this line
     const trTotal = document.createElement('tr');
