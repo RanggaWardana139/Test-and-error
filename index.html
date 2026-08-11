@@ -64,6 +64,9 @@ td.shifthead{
 td.cell{ padding:0; font-size:11px; min-width:100px; height:34px; }
 td.cell.empty{ color:var(--muted); opacity:0.35; padding:6px 3px; text-align:center; }
 td.total-cell{ background:var(--panel); font-weight:700; height:34px; padding:0; }
+td.shipment-cell{ padding:6px 4px; vertical-align:top; text-align:center; height:auto; }
+.shipment-list{ display:flex; flex-direction:column; gap:4px; }
+.shipment-item{ background:var(--brand-white); border:1px solid var(--line); border-radius:4px; padding:5px 6px; font-size:10.5px; color:var(--text); font-weight:600; }
 td.cell.plan-cell, td.total-cell.plan-cell{ color:var(--muted); font-style:italic; font-weight:600; font-size:12px; }
 td.cell.actual-cell, td.total-cell.actual-cell{ color:var(--brand-dark-blue); font-weight:700; font-size:12.5px; }
 td.target-cell{ background:var(--panel); font-weight:700; height:34px; padding:0; }
@@ -163,6 +166,8 @@ const SOURCES = [
   { key:'briquettes', label:'Briquettes Line Factory 2',           target:32000, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1694376471&single=true&output=csv', cols:{week:0,date:1,shift:2,val:4} },
   { key:'bagmaking',  label:'F3 - Bag Making', target:null, unit:'pcs', noShifts:true, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=808318571&single=true&output=csv', cols:{week:0,date:2,planning:3,val:4} },
   { key:'packing',    label:null, target:25000, isPackingLine:true, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=1228034420&single=true&output=csv', cols:{week:0,date:1,shift:2,line:3,val:4} },
+  { key:'sizing',      label:'Lump Wood Sizing Line', target:6500, deriveWeekFromDate:true, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=133627487&single=true&output=csv', cols:{date:0,shift:1,val:2} },
+  { key:'containers', label:'Containers Shipment', isShipment:true, deriveWeekFromDate:true, fullContainerCol:3, url:'https://docs.google.com/spreadsheets/d/e/2PACX-1vTSFb8mibeLxtTRWAllYDxiUr6RT0ezSeMRxvEObufk-EIKTQjibnLq9R3d4hbQcDbIf9fvkbmm-TDK/pub?gid=2113648910&single=true&output=csv', cols:{week:0,date:1,product:2} },
 ];
 
 // Wide-format weekly targets sheet: one row per week, one column per line.
@@ -180,33 +185,62 @@ const GROUP_ORDER = [
   { key:'packing_l1',  label:'F4 - Briquettes Packing Line 1',   target:25000, noWeeklyTarget:true },
   { key:'packing_l2',  label:'F4 - Briquettes Packing Line 2',   target:25000, noWeeklyTarget:true },
   { key:'packing_l3',  label:'F4 - Lump Wood Packing Line 3',    target:7500,  noWeeklyTarget:true },
+  { key:'sizing',      label:'Lump Wood Sizing Line',             target:6500 },
+  { key:'containers',  label:'Containers Shipment',              isShipment:true },
 ];
 
 const BASE_MONDAY_UTC = Date.UTC(2025, 11, 29); // canonical Monday for week 1
-const MONTH_ABBR = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+const MONTH_ABBR = {
+  jan:0, feb:1, mar:2, apr:3, may:4, mei:4, jun:5, jun_i:5, jul:6, jul_i:6,
+  aug:7, agu:7, ags:7, sep:8, sept:8, oct:9, okt:9, nov:10, des:11, dec:11
+};
 
 function canonicalMondayUTC(week){ return BASE_MONDAY_UTC + (week-1)*7*86400000; }
 
-// Parse dates like "2-Jan-2026", "30 May-2026", or ambiguous "8/4/2026" /
-// "10/07/2026" slash dates. For slash dates, tries both day/month orderings
-// and picks whichever lands inside (or near) the row's reported week window,
-// since the sheet mixes both conventions.
-function parseProdDate(raw, week){
+// Converts a "YYWW" code (e.g. 2602 = week 2 of 2026) into an approximate
+// week number on OUR internal Monday-anchored scale — used only as a rough
+// hint for resolving ambiguous slash dates, never as the final week bucket.
+function yywwToHintWeek(code){
+  const s = String(code||'').trim();
+  const m = s.match(/^(\d{2})(\d{2})$/);
+  if(!m) return null;
+  const year = 2000 + parseInt(m[1]);
+  const wk = parseInt(m[2]);
+  const jan1 = Date.UTC(year,0,1);
+  const jan1Dow = new Date(jan1).getUTCDay();
+  const daysToMonday = (jan1Dow===0) ? 1 : (jan1Dow===1 ? 0 : 8-jan1Dow);
+  const firstMonday = jan1 + daysToMonday*86400000;
+  const approxMondayUTC = firstMonday + (wk-1)*7*86400000;
+  return 1 + Math.floor((approxMondayUTC - BASE_MONDAY_UTC)/(7*86400000));
+}
+
+// Parse dates like "2-Jan-2026", "13-Jan-26", "04-Agu-26" (Indonesian month
+// abbreviations included), or ambiguous "8/4/2026" / "01/13/2026" slash
+// dates. For slash dates, tries both day/month orderings and picks whichever
+// lands inside (or near) the row's hinted week window — unless
+// preferMonthFirst is set, which skips the guesswork for sources already
+// confirmed to consistently use MM/DD (e.g. rows like "01/13" are only
+// valid as MM/DD, since day 01 / month 13 doesn't exist).
+function parseProdDate(raw, week, preferMonthFirst){
   if(!raw) return null;
   const s = String(raw).trim();
-  let m = s.match(/^(\d{1,2})[\s\-]([A-Za-z]{3,})[\s\-](\d{4})$/);
+  let m = s.match(/^(\d{1,2})[\s\-]([A-Za-z]{3,})[\s\-](\d{2,4})$/);
   if(m){
     const day = parseInt(m[1]);
     const mon = MONTH_ABBR[m[2].slice(0,3).toLowerCase()];
-    const year = parseInt(m[3]);
+    let year = parseInt(m[3]);
+    if(year < 100) year += 2000;
     if(mon===undefined) return null;
     return Date.UTC(year, mon, day);
   }
-  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if(m){
-    const a = parseInt(m[1]), b = parseInt(m[2]), year = parseInt(m[3]);
+    const a = parseInt(m[1]), b = parseInt(m[2]);
+    let year = parseInt(m[3]);
+    if(year < 100) year += 2000;
     const candA = Date.UTC(year, a-1, b); // month/day
     const candB = Date.UTC(year, b-1, a); // day/month
+    if(preferMonthFirst) return candA;
     if(week){
       const cmon = canonicalMondayUTC(week);
       const lo = cmon - 5*86400000, hi = cmon + 11*86400000; // generous window
@@ -292,27 +326,74 @@ function parseWeeklyTargets(rows){
   return out;
 }
 
-function processSource(source, rows, out, dayTargetsOut){
+function processSource(source, rows, out, dayTargetsOut, shipmentsOut){
   const c = source.cols;
   let headerIdx = -1;
   for(let i=0;i<rows.length;i++){
-    const cell = (rows[i][c.week]||'').toString().trim().toLowerCase();
-    if(cell.startsWith('week')){ headerIdx = i; break; }
+    if(source.deriveWeekFromDate && c.week===undefined){
+      const cell = (rows[i][c.date]||'').toString().trim().toLowerCase();
+      if(cell.startsWith('production')){ headerIdx = i; break; }
+    } else {
+      const cell = (rows[i][c.week]||'').toString().trim().toLowerCase();
+      if(cell.startsWith('week')){ headerIdx = i; break; }
+    }
   }
   if(headerIdx===-1) throw new Error('Header row not found for '+source.key);
+
+  // Containers Shipment: one row per container, no numeric value — just a
+  // product name per date. Kept in its own side-channel (shipmentsOut)
+  // rather than the numeric cellSums pipeline.
+  if(source.isShipment){
+    for(let i=headerIdx+1;i<rows.length;i++){
+      const r = rows[i];
+      if(!r || r.length===0) continue;
+      if(source.fullContainerCol!==undefined){
+        const fc = (r[source.fullContainerCol]||'').toString().trim();
+        if(fc !== '1') continue; // only single-product ("full container") shipments
+      }
+      const rawWeekCode = c.week!==undefined ? (r[c.week]||'').toString().trim() : '';
+      const rawDate = (r[c.date]||'').toString().trim();
+      const product = (r[c.product]||'').toString().trim();
+      if(!rawDate || !product || product==='#N/A') continue;
+
+      const hintWeek = rawWeekCode ? yywwToHintWeek(rawWeekCode) : null;
+      let dUTC = parseProdDate(rawDate, hintWeek, true);
+      if(dUTC===null) continue;
+      let dt = new Date(dUTC);
+      if(dt.getUTCFullYear() >= 2900){
+        dUTC = Date.UTC(dt.getUTCFullYear()-1000, dt.getUTCMonth(), dt.getUTCDate());
+        dt = new Date(dUTC);
+      }
+      if(dUTC < Date.UTC(2025,10,1) || dUTC > Date.UTC(2026,8,1)) continue;
+
+      // Week bucket comes from the resolved date itself (Monday-anchored),
+      // not the sheet's own week code — that code is only used as a hint
+      // above for resolving ambiguous slash dates.
+      const effWeek = 1 + Math.floor((dUTC - BASE_MONDAY_UTC)/(7*86400000));
+      const dateStr = dt.toISOString().slice(0,10);
+      shipmentsOut[effWeek] = shipmentsOut[effWeek] || {};
+      shipmentsOut[effWeek][dateStr] = shipmentsOut[effWeek][dateStr] || [];
+      shipmentsOut[effWeek][dateStr].push(product);
+    }
+    return;
+  }
 
   for(let i=headerIdx+1;i<rows.length;i++){
     const r = rows[i];
     if(!r || r.length===0) continue;
-    const rawWeek = (r[c.week]||'').toString().trim();
+    const rawWeek = (source.deriveWeekFromDate ? '' : (r[c.week]||'')).toString().trim();
     const rawDate = (r[c.date]||'').toString().trim();
     const rawShift = source.noShifts ? '1' : (r[c.shift]||'').toString().trim();
-    const rawVal = (r[c.val]||'').toString().trim();
+    const rawVal = (r[c.val]||'').toString().trim().replace(/,/g,'');
     if(!rawDate || (!source.noShifts && !rawShift) || rawVal==='') continue;
     const val = parseFloat(rawVal);
     if(isNaN(val)) continue;
-    const week = parseInt(rawWeek);
-    if(isNaN(week)) continue;
+
+    let week = null;
+    if(!source.deriveWeekFromDate){
+      week = parseInt(rawWeek);
+      if(isNaN(week)) continue;
+    }
 
     let dUTC = parseProdDate(rawDate, week);
     if(dUTC===null) continue;
@@ -324,13 +405,19 @@ function processSource(source, rows, out, dayTargetsOut){
       dt = new Date(dUTC);
     }
 
-    // fix week-boundary drift: a Sunday tagged as belonging to the *next*
-    // Monday-Sunday week actually belongs to the previous week's Sunday
-    let effWeek = week;
-    let cmon = canonicalMondayUTC(effWeek);
-    if(dUTC === cmon - 86400000){
-      effWeek = effWeek - 1;
-      cmon = canonicalMondayUTC(effWeek);
+    let effWeek;
+    if(source.deriveWeekFromDate){
+      // No trustworthy week column at all — the date itself is the source
+      // of truth for which Monday-Sunday week this row belongs to.
+      effWeek = 1 + Math.floor((dUTC - BASE_MONDAY_UTC)/(7*86400000));
+    } else {
+      // fix week-boundary drift: a Sunday tagged as belonging to the *next*
+      // Monday-Sunday week actually belongs to the previous week's Sunday
+      effWeek = week;
+      let cmon = canonicalMondayUTC(effWeek);
+      if(dUTC === cmon - 86400000){
+        effWeek = effWeek - 1;
+      }
     }
 
     // drop genuine stray rows: a full year (or more) outside the reporting window
@@ -441,11 +528,13 @@ async function loadData(){
   statusBar.textContent = 'Loading latest data from Google Sheets…';
   const allRows = [];
   const dayTargets = {};
+  const shipments = {};
   const failed = [];
   for(const source of SOURCES){
+    if(!source.url) continue; // not set up yet — skip quietly, no error shown
     try{
       const rows = await fetchCsvRows(source.url);
-      processSource(source, rows, allRows, dayTargets);
+      processSource(source, rows, allRows, dayTargets, shipments);
     }catch(e){
       failed.push(source.key);
       console.error('Failed to load', source.key, e);
@@ -469,6 +558,7 @@ async function loadData(){
   }
   DATA = buildData(allRows, dayTargets);
   DATA.weeklyTargets = weeklyTargets;
+  DATA.shipments = shipments;
   if(failed.length){
     statusBar.className = 'error';
     statusBar.textContent = 'Loaded, but could not reach: ' + failed.join(', ') + ' — showing the other lines only.';
@@ -523,6 +613,49 @@ function render(){
   const groupWeekSums = {};
 
   DATA.groups.forEach((g, gi)=>{
+    // Containers Shipment: a list of what shipped each day, not a number.
+    // One row of stacked product boxes, then a Daily Total row with counts.
+    if(g.isShipment){
+      const shipForWeek = (DATA.shipments && DATA.shipments[w]) || {};
+      const trList = document.createElement('tr');
+      let listHtml = `<td class="rowhead" colspan="2" style="text-align:center;">${g.label}</td>`;
+      let weekCount = 0;
+      days.forEach(day=>{
+        const items = shipForWeek[day] || [];
+        weekCount += items.length;
+        if(items.length){
+          listHtml += `<td class="shipment-cell"><div class="shipment-list">` +
+            items.map(p=>`<div class="shipment-item">${p}</div>`).join('') +
+            `</div></td>`;
+        } else {
+          listHtml += `<td class="cell empty">&mdash;</td>`;
+        }
+      });
+      listHtml += `<td class="total-cell empty">&mdash;</td>`;
+      listHtml += `<td class="target-cell empty" rowspan="2">&mdash;</td>`;
+      trList.innerHTML = listHtml;
+      tbody.appendChild(trList);
+
+      const trTotal = document.createElement('tr');
+      trTotal.className = 'daily-total-row';
+      let totalHtml = `<td class="daily-total-head" colspan="2">Daily Total</td>`;
+      days.forEach(day=>{
+        const n = (shipForWeek[day] || []).length;
+        totalHtml += n>0 ? `<td class="daily-total-cell actual-cell">${n} Container${n===1?'':'s'}</td>` : `<td class="daily-total-cell empty">&mdash;</td>`;
+      });
+      totalHtml += weekCount>0 ? `<td class="total-cell daily-total-cell actual-cell">${weekCount} Container${weekCount===1?'':'s'}</td>` : `<td class="total-cell daily-total-cell empty">&mdash;</td>`;
+      trTotal.innerHTML = totalHtml;
+      tbody.appendChild(trTotal);
+
+      if(gi < DATA.groups.length - 1){
+        const trSpacer = document.createElement('tr');
+        trSpacer.className = 'group-spacer';
+        trSpacer.innerHTML = `<td colspan="${4 + days.length}"></td>`;
+        tbody.appendChild(trSpacer);
+      }
+      return;
+    }
+
     const cellsForGroup = DATA.cells[String(w)][g.key] || {};
     const totalsForGroup = DATA.rowTotals[String(w)][g.key] || {};
     const targetKey = (g.key==='readymix_l1' || g.key==='readymix_l2') ? null : g.key;
